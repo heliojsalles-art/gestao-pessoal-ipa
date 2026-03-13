@@ -49,9 +49,9 @@ workflows:
             npx cap add ios
           fi
 
-      - name: Generate native icon and splash assets
+      - name: Generate native assets
         script: |
-          npm run assets:generate:ios
+          npx capacitor-assets generate --ios
 
       - name: Sync Capacitor iOS
         script: |
@@ -65,6 +65,7 @@ workflows:
       - name: Build unsigned iPhone app
         script: |
           DERIVED_DATA="$CM_BUILD_DIR/build/DerivedData"
+
           xcodebuild build \
             -workspace "$CM_BUILD_DIR/$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -87,13 +88,23 @@ workflows:
             exit 1
           fi
 
-          if [ -f "$APP_PATH/Frameworks/Cordova.framework/Info.plist" ]; then
-            /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.helio.gestaopessoal.cordova" "$APP_PATH/Frameworks/Cordova.framework/Info.plist"
-          fi
+          echo "App encontrado em: $APP_PATH"
+          ls -la "$APP_PATH/Frameworks" || true
+          echo "Corrigindo bundle identifiers dos frameworks..."
 
-          if [ -f "$APP_PATH/Frameworks/CapacitorCommunitySqlite.framework/Info.plist" ]; then
-            /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.helio.gestaopessoal.sqlite" "$APP_PATH/Frameworks/CapacitorCommunitySqlite.framework/Info.plist"
-          fi
+          for framework in "$APP_PATH"/Frameworks/*.framework; do
+            PLIST="$framework/Info.plist"
+
+            if [ -f "$PLIST" ]; then
+              NAME=$(basename "$framework" .framework)
+              NEW_ID="$APP_BUNDLE_ID.$NAME"
+
+              echo "Ajustando $NAME -> $NEW_ID"
+
+              /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $NEW_ID" "$PLIST" || true
+              /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$PLIST" || true
+            fi
+          done
 
       - name: Package unsigned IPA for Sideloadly
         script: |
@@ -118,4 +129,66 @@ workflows:
       - build/*.ipa
       - build/DerivedData/Build/**/*.app
       - build/DerivedData/Build/**/*.dSYM
+      - /tmp/xcodebuild_logs/*.log
+
+  ios-simulator-unsigned:
+    name: Gestão Pessoal iOS - Simulador sem assinatura
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+
+    environment:
+      xcode: 26.0
+      cocoapods: default
+      vars:
+        XCODE_WORKSPACE: "ios/App/App.xcworkspace"
+        XCODE_SCHEME: "App"
+
+    cache:
+      cache_paths:
+        - $HOME/.npm
+        - $HOME/Library/Caches/CocoaPods
+
+    scripts:
+      - name: Install dependencies
+        script: |
+          npm install
+
+      - name: Build web app
+        script: |
+          npm run build
+
+      - name: Ensure iOS project exists
+        script: |
+          if [ ! -d "ios/App" ]; then
+            npx cap add ios
+          fi
+
+      - name: Generate native assets
+        script: |
+          npx capacitor-assets generate --ios
+
+      - name: Sync Capacitor iOS
+        script: |
+          npx cap sync ios
+
+      - name: Install CocoaPods
+        script: |
+          cd ios/App
+          pod install
+
+      - name: Build simulator .app
+        script: |
+          xcodebuild build \
+            -workspace "$CM_BUILD_DIR/$XCODE_WORKSPACE" \
+            -scheme "$XCODE_SCHEME" \
+            -sdk iphonesimulator \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -configuration Debug \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+    artifacts:
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
       - /tmp/xcodebuild_logs/*.log
