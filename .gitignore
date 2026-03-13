@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.DS_Store
+.vscode/
+.idea/
+coverage/
+*.log
+
+# Capacitor
+ios/App/build/
+ios/App/Pods/
+ios/App/output/
+ios/App/DerivedData/
+ios/App/.symlinks/
+ios/App/.capacitor/
+ios/App/Podfile.lock

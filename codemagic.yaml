@@ -1,0 +1,121 @@
+workflows:
+  ios-sideloadly-ipa:
+    name: Gestão Pessoal iOS - IPA para Sideloadly
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+
+    environment:
+      xcode: 26.0
+      cocoapods: default
+      vars:
+        XCODE_WORKSPACE: "ios/App/App.xcworkspace"
+        XCODE_SCHEME: "App"
+        APP_BUNDLE_ID: "com.helio.gestaopessoal"
+        APP_ARTIFACT_NAME: "GestaoPessoal-sideloadly"
+
+    cache:
+      cache_paths:
+        - $HOME/.npm
+        - $HOME/Library/Caches/CocoaPods
+        - ~/Library/Developer/Xcode/DerivedData
+
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
+
+    scripts:
+      - name: Show versions
+        script: |
+          node -v
+          npm -v
+          xcodebuild -version
+          pod --version
+
+      - name: Install dependencies
+        script: |
+          npm install
+
+      - name: Build web app
+        script: |
+          npm run build
+
+      - name: Ensure iOS project exists
+        script: |
+          if [ ! -d "ios/App" ]; then
+            npx cap add ios
+          fi
+
+      - name: Generate native icon and splash assets
+        script: |
+          npm run assets:generate:ios
+
+      - name: Sync Capacitor iOS
+        script: |
+          npx cap sync ios
+
+      - name: Install CocoaPods
+        script: |
+          cd ios/App
+          pod install
+
+      - name: Build unsigned iPhone app
+        script: |
+          DERIVED_DATA="$CM_BUILD_DIR/build/DerivedData"
+          xcodebuild build \
+            -workspace "$CM_BUILD_DIR/$XCODE_WORKSPACE" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Debug \
+            -sdk iphoneos \
+            -derivedDataPath "$DERIVED_DATA" \
+            PRODUCT_BUNDLE_IDENTIFIER="$APP_BUNDLE_ID" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Fix framework bundle identifiers
+        script: |
+          DERIVED_DATA="$CM_BUILD_DIR/build/DerivedData"
+          APP_PATH="$DERIVED_DATA/Build/Products/Debug-iphoneos/App.app"
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "App.app não encontrado em $APP_PATH"
+            find "$DERIVED_DATA" -maxdepth 6 -type d -name "*.app" || true
+            exit 1
+          fi
+
+          if [ -f "$APP_PATH/Frameworks/Cordova.framework/Info.plist" ]; then
+            /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.helio.gestaopessoal.cordova" "$APP_PATH/Frameworks/Cordova.framework/Info.plist"
+          fi
+
+          if [ -f "$APP_PATH/Frameworks/CapacitorCommunitySqlite.framework/Info.plist" ]; then
+            /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.helio.gestaopessoal.sqlite" "$APP_PATH/Frameworks/CapacitorCommunitySqlite.framework/Info.plist"
+          fi
+
+      - name: Package unsigned IPA for Sideloadly
+        script: |
+          DERIVED_DATA="$CM_BUILD_DIR/build/DerivedData"
+          APP_PATH="$DERIVED_DATA/Build/Products/Debug-iphoneos/App.app"
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "App.app não encontrado em $APP_PATH"
+            find "$DERIVED_DATA" -maxdepth 6 -type d -name "*.app" || true
+            exit 1
+          fi
+
+          rm -rf "$CM_BUILD_DIR/build/Payload"
+          mkdir -p "$CM_BUILD_DIR/build/Payload"
+          cp -R "$APP_PATH" "$CM_BUILD_DIR/build/Payload/App.app"
+
+          cd "$CM_BUILD_DIR/build"
+          /usr/bin/zip -qry "$APP_ARTIFACT_NAME.ipa" Payload
+          ls -lh "$APP_ARTIFACT_NAME.ipa"
+
+    artifacts:
+      - build/*.ipa
+      - build/DerivedData/Build/**/*.app
+      - build/DerivedData/Build/**/*.dSYM
+      - /tmp/xcodebuild_logs/*.log
